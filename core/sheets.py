@@ -1,13 +1,18 @@
 """Google Sheets integration — push jobs to a sheet for n8n / outreach workflows."""
 
+import json
+from pathlib import Path
+
+import google.auth
 import gspread
-from google.oauth2.service_account import Credentials
+from google.auth.exceptions import DefaultCredentialsError
+from google.oauth2 import service_account
+
+from config.settings import GOOGLE_SHEETS_CREDENTIALS_JSON
 from core.database import get_jobs
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+WRITE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+READONLY_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
 # Column headers that go into the sheet
 HEADERS = [
@@ -17,9 +22,101 @@ HEADERS = [
 ]
 
 
-def _get_client(creds_file: str) -> gspread.Client:
-    creds = Credentials.from_service_account_file(creds_file, scopes=SCOPES)
-    return gspread.authorize(creds)
+class SheetsConfigurationError(RuntimeError):
+    """Raised when no usable Google Sheets credentials are configured."""
+
+
+def _load_credentials(
+    creds_file: str | None = None,
+    credentials_json: str | None = None,
+    scopes: list[str] | None = None,
+):
+    """Resolve Railway JSON, an explicit local file, or standard local ADC."""
+    selected_scopes = scopes or WRITE_SCOPES
+    raw_json = (
+        GOOGLE_SHEETS_CREDENTIALS_JSON
+        if credentials_json is None
+        else credentials_json.strip()
+    )
+
+    if raw_json:
+        try:
+            info = json.loads(raw_json)
+            if not isinstance(info, dict) or info.get("type") != "service_account":
+                raise ValueError("expected service_account credentials")
+            return service_account.Credentials.from_service_account_info(
+                info, scopes=selected_scopes
+            )
+        except (KeyError, TypeError, ValueError, DefaultCredentialsError) as exc:
+            raise SheetsConfigurationError(
+                "Google Sheets service-account credentials are invalid"
+            ) from exc
+
+    if creds_file:
+        path = Path(creds_file).expanduser()
+        if not path.is_file():
+            raise SheetsConfigurationError(
+                "Google Sheets credentials are not configured"
+            )
+        try:
+            return service_account.Credentials.from_service_account_file(
+                str(path), scopes=selected_scopes
+            )
+        except (KeyError, TypeError, ValueError, DefaultCredentialsError) as exc:
+            raise SheetsConfigurationError(
+                "Google Sheets service-account credentials are invalid"
+            ) from exc
+
+    try:
+        credentials, _ = google.auth.default(scopes=selected_scopes)
+        return credentials
+    except DefaultCredentialsError as exc:
+        raise SheetsConfigurationError(
+            "Google Sheets credentials are not configured"
+        ) from exc
+
+
+def _get_client(
+    creds_file: str | None = None,
+    credentials_json: str | None = None,
+    scopes: list[str] | None = None,
+) -> gspread.Client:
+    credentials = _load_credentials(
+        creds_file=creds_file,
+        credentials_json=credentials_json,
+        scopes=scopes,
+    )
+    return gspread.authorize(credentials)
+
+
+def sheets_credentials_available(
+    creds_file: str | None = None,
+    credentials_json: str | None = None,
+) -> bool:
+    """Check credential availability without refreshing a token or calling Sheets."""
+    try:
+        _load_credentials(
+            creds_file=creds_file,
+            credentials_json=credentials_json,
+            scopes=READONLY_SCOPES,
+        )
+        return True
+    except SheetsConfigurationError:
+        return False
+
+
+def verify_sheet_access(
+    spreadsheet_id: str,
+    creds_file: str | None = None,
+    credentials_json: str | None = None,
+) -> None:
+    """Perform a read-only metadata request against the configured spreadsheet."""
+    client = _get_client(
+        creds_file=creds_file,
+        credentials_json=credentials_json,
+        scopes=READONLY_SCOPES,
+    )
+    client.open_by_key(spreadsheet_id)
 
 
 def _job_to_row(job: dict) -> list:
@@ -42,7 +139,7 @@ def _job_to_row(job: dict) -> list:
 
 
 def export_to_sheet(
-    creds_file: str,
+    creds_file: str | None,
     spreadsheet_id: str,
     sheet_name: str = "Jobs",
     min_score: int = 0,
@@ -69,7 +166,10 @@ def export_to_sheet(
     Returns:
         dict with export stats
     """
-    client = _get_client(creds_file)
+    if mode not in {"replace", "append"}:
+        raise ValueError("mode must be replace or append")
+
+    client = _get_client(creds_file=creds_file, scopes=WRITE_SCOPES)
     spreadsheet = client.open_by_key(spreadsheet_id)
 
     # Get or create worksheet
@@ -92,13 +192,15 @@ def export_to_sheet(
 
     if mode == "replace":
         worksheet.clear()
-        worksheet.update(values=[HEADERS] + rows, range_name="A1")
+        worksheet.update(values=[HEADERS] + rows, range_name="A1", raw=True)
     else:
         # Append mode — check if headers exist
         existing = worksheet.get_all_values()
         if not existing:
-            worksheet.update(values=[HEADERS], range_name="A1")
-        worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+            worksheet.update(values=[HEADERS], range_name="A1", raw=True)
+        if rows:
+            # Remote job fields are untrusted. RAW prevents formula execution.
+            worksheet.append_rows(rows, value_input_option="RAW")
 
     # Auto-format header row bold
     worksheet.format("A1:N1", {
@@ -109,6 +211,5 @@ def export_to_sheet(
     return {
         "exported": len(rows),
         "sheet_name": sheet_name,
-        "spreadsheet_id": spreadsheet_id,
         "mode": mode,
     }

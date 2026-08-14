@@ -62,7 +62,7 @@ A profile is one row in the `profiles` table (JSON config), with sections matchi
 
 Email digest fields living on the profile: `recipient_email`, `email_greeting`, `email_digest_subject_role`. `recipient_email` **overrides** `RECIPIENT_EMAIL` in `.env`, so different profiles can send to different inboxes.
 
-The **sender address is fixed to `SENDER_EMAIL` in `.env`** and is not a profile setting — it has to match `SENDER_APP_PASSWORD`. The Profile page shows it read-only; change it in `.env`.
+The **sender address is fixed to `SMTP_FROM_EMAIL` in `.env`** and is not a profile setting. The Profile page shows it read-only; change it in `.env`.
 
 ### Profile API (summary)
 
@@ -126,18 +126,29 @@ Create a `.env` file in the project root with the following:
 # Sign up: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
 # Free tier: 200 requests/month
 RAPIDAPI_KEY=your_rapidapi_key_here
+JSEARCH_MONTHLY_LIMIT=200
+JSEARCH_MONTHLY_RESERVE=20
 
-# ─── Required for Daily Email Digest ───
-# Must use Gmail App Password, NOT your regular password
-# Generate at: https://myaccount.google.com/apppasswords
-# (Requires 2-Step Verification enabled first)
-SENDER_EMAIL=sender@example.com
-SENDER_APP_PASSWORD=replace_with_gmail_app_password
+# ─── Optional daily email digest (generic SMTP) ───
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_STARTTLS=true
+SMTP_USER=your_smtp_username
+SMTP_PASS=your_smtp_password
+SMTP_FROM_EMAIL=sender@example.com
 RECIPIENT_EMAIL=candidate@example.com
 
 # ─── Daily Digest Timing (IST timezone) ───
+ENABLE_SCHEDULER=false              # opt in only after testing SMTP
 DAILY_EMAIL_HOUR=9                  # 24-hour format (9 = 9:00 AM IST)
+DAILY_EMAIL_TIMEZONE=Asia/Kolkata
 DAILY_JOBS_COUNT=15                 # Number of jobs per email
+
+# Protect every UI/API route except health checks
+APP_USERNAME=jobhunter
+APP_PASSWORD=replace_with_a_long_random_password
+REQUIRE_AUTH=true
 
 # ─── Optional: Hunter.io (not actively used — LinkedIn search replaces it) ───
 # Sign up: https://hunter.io
@@ -145,8 +156,10 @@ HUNTER_API_KEY=
 
 # ─── Optional: Google Sheets Export ───
 # For n8n / external automation pipelines
-# Setup: Create Google Cloud service account → download credentials.json
-GOOGLE_SHEETS_CREDS=credentials.json
+# Railway: sealed JSON for a dedicated service account
+GOOGLE_SHEETS_CREDENTIALS_JSON=
+# Local alternative: an ignored .secrets/ file, or leave blank for gcloud ADC
+GOOGLE_SHEETS_CREDS=
 GOOGLE_SHEET_ID=
 ```
 
@@ -155,13 +168,18 @@ GOOGLE_SHEET_ID=
 | Variable | Required | What happens without it |
 |---|---|---|
 | `RAPIDAPI_KEY` | ⚠️ Strongly recommended | JSearch source won't run; loses ~60 fresh jobs/day |
-| `SENDER_EMAIL` | ✅ Required for email | Daily email won't send (the active profile can override this) |
-| `SENDER_APP_PASSWORD` | ✅ Required for email | Daily email won't send — must match whichever sender the profile uses |
+| `JSEARCH_MONTHLY_LIMIT`, `JSEARCH_MONTHLY_RESERVE` | Optional | Defaults to a 200-call limit with 20 calls held in reserve |
+| `SMTP_HOST`, `SMTP_PORT` | ✅ Required for email | Daily email won't send |
+| `SMTP_USER`, `SMTP_PASS` | ✅ Required for email | Daily email won't send |
+| `SMTP_FROM_EMAIL` | ✅ Required for email | Daily email won't send |
 | `RECIPIENT_EMAIL` | ✅ Required for email | Daily email has no destination (the active profile can override this) |
+| `ENABLE_SCHEDULER` | Optional (defaults to false) | Automatic daily collection/email remains off; manual actions still work |
 | `DAILY_EMAIL_HOUR` | Optional (defaults to 9) | Email sends at 9 AM IST |
 | `DAILY_JOBS_COUNT` | Optional (defaults to 15) | 15 jobs per email |
+| `APP_USERNAME`, `APP_PASSWORD`, `REQUIRE_AUTH=true` | Required for a public deployment | App is not protected; `REQUIRE_AUTH=true` makes a missing password fail closed |
 | `HUNTER_API_KEY` | Optional | Currently unused — LinkedIn search URLs replaced Hunter |
-| `GOOGLE_SHEETS_CREDS` | Optional | Sheets export disabled |
+| `GOOGLE_SHEETS_CREDENTIALS_JSON` | Optional | Railway Sheets export disabled |
+| `GOOGLE_SHEETS_CREDS` | Optional | Local `.secrets/` file fallback; gcloud ADC is tried when blank |
 | `GOOGLE_SHEET_ID` | Optional | Sheets export disabled |
 
 ### How to get each key
@@ -171,15 +189,20 @@ GOOGLE_SHEET_ID=
    - Subscribe to [JSearch](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch) (Free Basic plan)
    - Copy `X-RapidAPI-Key` from dashboard
 
-2. **Gmail App Password** (3 min)
-   - Go to [myaccount.google.com/security](https://myaccount.google.com/security)
-   - Enable **2-Step Verification** (required)
-   - Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-   - App name: `Job Scraper` → Create
-   - Copy the 16-character password (ignore spaces)
+2. **SMTP credentials**
+   - Use any provider that supports implicit TLS or STARTTLS.
+   - For Gmail, use an App Password instead of the account password.
+   - Railway allows outbound SMTP only on Pro and above. On Free, Trial, or
+     Hobby, keep `ENABLE_SCHEDULER=false` and use an HTTPS email provider once
+     that integration is added.
 
 3. **Google Sheets** (optional, 10 min)
-   - See [docs/02-setup.md](docs/02-setup.md) for full walkthrough
+   - Enable the Google Sheets API in a GCP project.
+   - Create a dedicated service account with no project roles and share only the
+     target spreadsheet with its email as Editor.
+   - Store its JSON as a sealed `GOOGLE_SHEETS_CREDENTIALS_JSON` variable on
+     Railway. Never commit the key or a human OAuth refresh token.
+   - See [docs/02-setup.md](docs/02-setup.md) for the local file/ADC alternatives.
 
 See [docs/02-setup.md](docs/02-setup.md) for complete setup instructions.
 
@@ -191,7 +214,7 @@ See [docs/02-setup.md](docs/02-setup.md) for complete setup instructions.
 - **Frontend:** Vanilla JS, HTML, CSS (no framework) — three pages: Jobs, Outreach, Profile
 - **Config:** YAML presets in `profiles/` for role configurations; runtime config lives in the `profiles` SQLite table
 - **External APIs:** JSearch (RapidAPI), Greenhouse, Lever, Ashby, Remotive, RemoteOK, Arbeitnow
-- **Email:** Gmail SMTP with App Password
+- **Email:** Generic SMTP with TLS/STARTTLS
 
 ---
 
@@ -203,7 +226,7 @@ Everything free or near-free:
 |---|---|---|
 | JSearch (RapidAPI) | Free 200 calls/month | Aggregated LinkedIn/Indeed/Glassdoor jobs |
 | Greenhouse/Lever/Ashby | Free, unlimited | Company career pages |
-| Gmail SMTP | Free | Sending daily email |
+| SMTP provider | Provider-dependent | Sending daily email |
 | Server hosting | $0 (local) or ~$5/mo (VPS) | Keep it running 24/7 |
 
 **Total: $0–$5/month**

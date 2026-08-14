@@ -11,7 +11,9 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
 from config.settings import (
-    SENDER_EMAIL, SENDER_APP_PASSWORD, RECIPIENT_EMAIL, DAILY_JOBS_COUNT,
+    DAILY_JOBS_COUNT, EMAIL_CONFIGURED, RECIPIENT_EMAIL,
+    SMTP_FROM_EMAIL, SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_SECURE,
+    SMTP_STARTTLS, SMTP_USER,
 )
 from core.database import (
     get_unemailed_outreach, mark_outreach_emailed, log_email,
@@ -21,6 +23,44 @@ from core.profile import get_active_profile
 
 def log(msg):
     print(msg, flush=True)
+
+
+def _connect_smtp():
+    """Open, secure, and authenticate an SMTP connection without sending."""
+    context = ssl.create_default_context()
+    if SMTP_SECURE:
+        server = smtplib.SMTP_SSL(
+            SMTP_HOST, SMTP_PORT, context=context, timeout=30,
+        )
+    else:
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+
+    try:
+        server.ehlo()
+        if SMTP_STARTTLS and not SMTP_SECURE:
+            server.starttls(context=context)
+            server.ehlo()
+        server.login(SMTP_USER, SMTP_PASS)
+        return server
+    except Exception:
+        server.close()
+        raise
+
+
+def verify_smtp_connection() -> dict:
+    """Validate TLS and credentials without creating or sending a message."""
+    if not EMAIL_CONFIGURED:
+        return {"ok": False, "error": "SMTP sender credentials are not configured"}
+    try:
+        with _connect_smtp():
+            pass
+        return {
+            "ok": True,
+            "transport": "implicit_tls" if SMTP_SECURE else "starttls",
+        }
+    except Exception as exc:
+        log(f"SMTP connection check failed ({type(exc).__name__})")
+        return {"ok": False, "error": "SMTP connection check failed"}
 
 
 def _escape(s: str) -> str:
@@ -215,13 +255,13 @@ def send_daily_digest(limit: int = None, dry_run: bool = False) -> dict:
 
     profile = get_active_profile()
     out_cfg = profile.get("outreach") or {}
-    # Sender is fixed to .env (SENDER_EMAIL) — it must match SENDER_APP_PASSWORD.
-    # Only the recipient can be overridden per profile.
-    sender = SENDER_EMAIL
+    # Sender credentials are deployment settings. Only the recipient can be
+    # overridden per profile.
+    sender = SMTP_FROM_EMAIL
     recipient = (out_cfg.get("recipient_email") or "").strip() or RECIPIENT_EMAIL
 
-    if not sender or not SENDER_APP_PASSWORD:
-        return {"error": "SENDER_EMAIL or SENDER_APP_PASSWORD not configured in .env"}
+    if not EMAIL_CONFIGURED:
+        return {"error": "SMTP sender credentials are not configured"}
     if not recipient:
         return {"error": "Recipient email not configured (set on profile or RECIPIENT_EMAIL in .env)"}
 
@@ -256,22 +296,21 @@ def send_daily_digest(limit: int = None, dry_run: bool = False) -> dict:
     msg.attach(MIMEText(html, "html", "utf-8"))
 
     try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-            server.login(sender, SENDER_APP_PASSWORD)
-            server.send_message(msg)
+        with _connect_smtp() as server:
+            server.send_message(msg, from_addr=sender, to_addrs=[recipient])
 
         outreach_ids = [i["id"] for i in items]
         mark_outreach_emailed(outreach_ids)
         log_email(recipient, subject, len(items), outreach_ids, "sent")
-        log(f"Sent daily digest: {len(items)} items from {sender} to {recipient}")
+        log(f"Sent daily digest: {len(items)} items")
 
         return {"sent": len(items), "subject": subject, "sender": sender, "recipient": recipient}
     except Exception as e:
-        log(f"Email send failed: {e}")
+        error_type = type(e).__name__
+        log(f"Email send failed ({error_type})")
         log_email(recipient, subject, len(items),
-                   [i["id"] for i in items], "failed", str(e))
-        return {"error": str(e)}
+                  [i["id"] for i in items], "failed", error_type)
+        return {"error": "Email delivery failed; check the service logs"}
 
 
 def generate_outreach_for_top_jobs(limit: int = 15, min_score: int = 40,

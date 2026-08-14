@@ -6,8 +6,10 @@ Docs: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
 import httpx
 from sources.base import BaseSource
 from core.models import Job
-from config.settings import RAPIDAPI_KEY
-from core.database import log_api_call
+from config.settings import (
+    JSEARCH_MONTHLY_LIMIT, JSEARCH_MONTHLY_RESERVE, RAPIDAPI_KEY,
+)
+from core.database import get_api_usage, log_api_call
 
 
 class JSearchSource(BaseSource):
@@ -33,6 +35,10 @@ class JSearchSource(BaseSource):
         all_jobs = []
         async with httpx.AsyncClient(timeout=60) as client:
             for q in self.queries:
+                usage = get_api_usage("jsearch")
+                usable_limit = JSEARCH_MONTHLY_LIMIT - JSEARCH_MONTHLY_RESERVE
+                if usage["month"] >= usable_limit:
+                    break
                 try:
                     params = {**q, "page": 1, "num_pages": 1, "employment_types": "FULLTIME"}
                     resp = await client.get(self.BASE_URL, headers=headers, params=params)

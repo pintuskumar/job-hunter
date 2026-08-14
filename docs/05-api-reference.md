@@ -227,8 +227,23 @@ Export filtered jobs to Google Sheet.
 
 **Query params:** same filters as `/api/jobs` + `sheet_name`, `mode` (replace/append)
 
+Returns `exported`, `sheet_name`, and `mode`. Invalid modes return 422; missing
+configuration returns 503; provider failures return a generic 502. Job values
+are written as raw text so source data cannot be interpreted as formulas.
+
 ### `GET /api/export/sheets/status`
 Check if Google Sheets is configured.
+
+Returns `configured`, `sheet_id_configured`, and `credentials_available`. It
+does not refresh a token, call the Sheets API, or expose the spreadsheet ID or
+credential source. Standard ADC discovery may probe the runtime metadata host.
+
+### `GET /api/export/sheets/verify`
+Perform a read-only metadata request to verify that the configured credential
+can reach the spreadsheet. The response contains booleans only.
+
+Returns a generic 502 if Google cannot be reached or the service account lacks
+access, and 503 when local configuration is incomplete.
 
 ---
 

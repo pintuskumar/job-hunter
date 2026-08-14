@@ -10,8 +10,22 @@ const state = {
 
 // ── API ──
 async function api(path, opts = {}) {
-    const resp = await fetch(`/api${path}`, opts);
-    return resp.json();
+    const init = { headers: {}, ...opts };
+    if (init.body && typeof init.body !== 'string') {
+        init.body = JSON.stringify(init.body);
+        init.headers['Content-Type'] = 'application/json';
+    }
+    const resp = await fetch(`/api${path}`, init);
+    if (!resp.ok) {
+        let detail = resp.statusText;
+        try {
+            const body = await resp.json();
+            detail = body.detail || body.error || JSON.stringify(body);
+        } catch {}
+        throw new Error(`${resp.status}: ${detail}`);
+    }
+    const contentType = resp.headers.get('content-type') || '';
+    return contentType.includes('application/json') ? resp.json() : resp.text();
 }
 
 async function loadJobs() {
@@ -136,8 +150,9 @@ function indiaBadge(value, note) {
         no: 'Not India',
         unknown: 'Unknown',
     };
-    const label = labels[value] || labels.unknown;
-    const cls = `india-${value || 'unknown'}`;
+    const safeValue = Object.prototype.hasOwnProperty.call(labels, value) ? value : 'unknown';
+    const label = labels[safeValue];
+    const cls = `india-${safeValue}`;
     const tooltip = note ? ` title="${escapeHtml(note)}"` : '';
     return `<span class="${cls}"${tooltip}>${label}</span>`;
 }
@@ -169,7 +184,7 @@ function renderStats() {
         </div>
         ${Object.entries(s.by_source || {}).map(([src, count]) => `
             <div class="stat-card">
-                <div class="label">${src}</div>
+                <div class="label">${escapeHtml(src)}</div>
                 <div class="value">${count}</div>
             </div>
         `).join('')}
@@ -191,7 +206,8 @@ function scoreClass(score) {
 }
 
 function statusClass(status) {
-    return `status-${status || 'new'}`;
+    const allowed = new Set(['new', 'reviewed', 'applied', 'stale']);
+    return `status-${allowed.has(status) ? status : 'new'}`;
 }
 
 function stripHtml(html) {
@@ -244,7 +260,7 @@ function renderJobs() {
                 </div>
             </div>
             <div class="job-actions">
-                <span class="status-badge ${statusClass(job.status)}">${job.status}</span>
+                <span class="status-badge ${statusClass(job.status)}">${escapeHtml(job.status || 'new')}</span>
                 ${job.mark_for_email ? '<span style="color:var(--yellow);font-size:11px;">📧 Marked</span>' : ''}
             </div>
         </div>
@@ -262,7 +278,7 @@ function openModal(jobId) {
             <span class="score-badge ${scoreClass(job.relevance_score)}" style="width:40px;height:40px;font-size:14px;">
                 ${job.relevance_score}
             </span>
-            <span class="status-badge ${statusClass(job.status)}">${job.status}</span>
+            <span class="status-badge ${statusClass(job.status)}">${escapeHtml(job.status || 'new')}</span>
             ${indiaBadge(job.india_friendly, job.location_note)}
             <span class="tag">${escapeHtml(job.source)}</span>
             ${job.salary ? `<span class="tag">${escapeHtml(job.salary)}</span>` : ''}
@@ -274,12 +290,12 @@ function openModal(jobId) {
                 `<span class="tag">${escapeHtml(t.trim())}</span>`
             ).join('')}
         </div>
-        <div class="modal-desc">${job.description || '<em>No description available</em>'}</div>
+        <div class="modal-desc" style="white-space:pre-wrap;">${escapeHtml(job.description || 'No description available')}</div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="updateStatus('${job.id}', 'reviewed')">Mark Reviewed</button>
             <button class="btn btn-green" onclick="updateStatus('${job.id}', 'applied')">Mark Applied</button>
             <button class="btn btn-yellow" onclick="updateStatus('${job.id}', 'stale')">Mark Stale</button>
-            ${job.url ? `<a href="${escapeHtml(job.url)}" target="_blank" class="btn btn-primary">Apply</a>` : ''}
+            ${safeHttpUrl(job.url) ? `<a href="${escapeHtml(safeHttpUrl(job.url))}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Apply</a>` : ''}
             <button class="btn btn-outline" onclick="closeModal()">Close</button>
         </div>
     `;
@@ -295,6 +311,16 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function safeHttpUrl(raw) {
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw, window.location.origin);
+        return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+    } catch {
+        return '';
+    }
 }
 
 function formatDate(dateStr) {
@@ -378,7 +404,7 @@ async function checkSheetsStatus() {
         const data = await api('/export/sheets/status');
         const btn = document.getElementById('btn-export');
         if (!data.configured) {
-            btn.title = 'Google Sheets not configured — add GOOGLE_SHEET_ID + credentials.json';
+            btn.title = 'Google Sheets not configured — add a Sheet ID and credentials';
             btn.style.opacity = '0.6';
         }
     } catch (e) {}
@@ -406,12 +432,8 @@ async function doExport() {
 
     try {
         const data = await api(`/export/sheets?${params}`, { method: 'POST' });
-        if (data.error) {
-            showToast('Export failed: ' + data.error);
-        } else {
-            showToast(`Exported ${data.exported} jobs to Google Sheets!`);
-            closeExportModal();
-        }
+        showToast(`Exported ${data.exported} jobs to Google Sheets!`);
+        closeExportModal();
     } catch (e) {
         showToast('Export failed: ' + e.message);
     } finally {
@@ -571,3 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
         searchTimeout = setTimeout(applyFilters, 400);
     });
 });
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { api };
+}

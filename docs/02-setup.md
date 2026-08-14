@@ -42,16 +42,12 @@ JSearch aggregates LinkedIn + Indeed + Glassdoor. **Free tier: 200 requests/mont
 Was used for finding contact emails. Replaced with LinkedIn search URLs.
 Key stays in `.env` for future use but can be empty.
 
-### 2c. Gmail App Password
+### 2c. SMTP credentials
 
 Required for sending the daily digest email.
 
-1. Go to **https://myaccount.google.com/security**
-2. Enable **2-Step Verification** (required for app passwords)
-3. Go to **https://myaccount.google.com/apppasswords**
-4. App name: `Job Scraper`
-5. Click **Create** — copy the 16-character password
-6. **Don't save the Gmail password — save only the app password**
+Use an SMTP provider that supports implicit TLS or STARTTLS. If using Gmail,
+create an App Password; never use your normal account password.
 
 ---
 
@@ -66,28 +62,56 @@ Edit `.env`:
 ```bash
 # JSearch (RapidAPI) — required
 RAPIDAPI_KEY=your_rapidapi_key_here
+JSEARCH_MONTHLY_LIMIT=200
+JSEARCH_MONTHLY_RESERVE=20
 
 # Hunter.io — optional, not currently used
 HUNTER_API_KEY=
 
-# Gmail SMTP — required for daily email
-SENDER_EMAIL=sender@example.com
-SENDER_APP_PASSWORD=replace_with_gmail_app_password
+# Generic SMTP — required for daily email
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_STARTTLS=true
+SMTP_USER=your_smtp_username
+SMTP_PASS=your_smtp_password
+SMTP_FROM_EMAIL=sender@example.com
 RECIPIENT_EMAIL=candidate@example.com
 
 # Daily digest timing (IST timezone)
+ENABLE_SCHEDULER=false
 DAILY_EMAIL_HOUR=9
+DAILY_EMAIL_TIMEZONE=Asia/Kolkata
 DAILY_JOBS_COUNT=15
 
+# Required for a public deployment
+APP_USERNAME=jobhunter
+APP_PASSWORD=replace_with_a_long_random_password
+REQUIRE_AUTH=true
+
 # Google Sheets export — optional
-GOOGLE_SHEETS_CREDS=credentials.json
+GOOGLE_SHEETS_CREDENTIALS_JSON=
+GOOGLE_SHEETS_CREDS=
 GOOGLE_SHEET_ID=
 ```
 
 **Important:**
-- `SENDER_APP_PASSWORD` is the 16-character App Password, **not** your Gmail login password
-- `SENDER_EMAIL` is the sender. It can be any Gmail you control.
+- `SMTP_PASS` is an SMTP credential, **not** a normal account password.
+- Set `SMTP_SECURE=true` for implicit TLS (commonly port 465).
+- Set `SMTP_SECURE=false` and `SMTP_STARTTLS=true` for STARTTLS (commonly port 587).
+- `SMTP_FROM_EMAIL` is the message sender.
 - `RECIPIENT_EMAIL` is where the daily digest gets delivered (the job seeker)
+
+For Railway, create a dedicated Google service account, enable the Google
+Sheets API, share only the target spreadsheet with the service-account email as
+Editor, and set the complete JSON key as the sealed
+`GOOGLE_SHEETS_CREDENTIALS_JSON` variable. Do not commit it or copy a human
+OAuth refresh token to Railway.
+
+For local development, either put a service-account JSON file under the ignored
+`.secrets/` directory and point `GOOGLE_SHEETS_CREDS` to it, or leave the path
+blank and use Application Default Credentials. Only the Google Sheets scope is
+required; Drive access is not used by the app.
 
 ---
 
@@ -112,7 +136,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 You should see:
 ```
 INFO:     Uvicorn running on http://127.0.0.1:8000
-Scheduled daily digest at 9:00 IST
+Daily digest scheduler disabled
 ```
 
 ---
@@ -151,7 +175,8 @@ Check `RECIPIENT_EMAIL` inbox. Email should arrive in 10-30 seconds.
 
 ## Step 10: Let the Daily Schedule Run
 
-From now on, the system auto-runs every day at 9:00 AM IST:
+After a successful manual email test, set `ENABLE_SCHEDULER=true` and restart.
+The system then auto-runs every day at 9:00 AM IST:
 1. Collects fresh jobs
 2. Generates outreach for new top-scoring ones
 3. Sends email
@@ -164,32 +189,18 @@ From now on, the system auto-runs every day at 9:00 AM IST:
 
 To keep the daily schedule active, run on a VPS instead of your laptop.
 
-### Option A: DigitalOcean / Hetzner VPS (~$5/mo)
+### Option A: Railway
 
-```bash
-# On the VPS
-git clone <your-repo> job-scraper
-cd job-scraper
-pip install -r requirements.txt
-cp .env.example .env
-# Edit .env with your keys
+The included `railway.json` uses Railpack, one Uvicorn worker, and
+`/health/ready`. Attach a persistent volume at `/data`, set the approved
+variables individually, then deploy with `railway up`. Do not upload `.env`.
 
-# Run as a systemd service
-sudo cp deploy/job-scraper.service /etc/systemd/system/
-sudo systemctl enable --now job-scraper
-```
+Railway blocks outbound SMTP on Free, Trial, and Hobby plans. SMTP requires
+Pro or above followed by a redeploy; lower tiers need a transactional email
+provider's HTTPS API. Leave `ENABLE_SCHEDULER=false` until a no-send connection
+test succeeds and a recipient is explicitly configured.
 
-### Option B: Railway / Render (free tier)
-
-Both offer free tier small apps. Create `Procfile`:
-
-```
-web: uvicorn main:app --host 0.0.0.0 --port $PORT
-```
-
-Add env vars in their dashboard.
-
-### Option C: Keep your laptop on
+### Option B: Keep your laptop on
 
 If laptop is always on, leave the server running. Add to startup if needed.
 
@@ -197,16 +208,15 @@ If laptop is always on, leave the server running. Add to startup if needed.
 
 ## Troubleshooting
 
-### "SENDER_EMAIL or SENDER_APP_PASSWORD not configured"
+### "SMTP sender credentials are not configured"
 
-- Check `.env` has both values
+- Check all required `SMTP_*` values
 - Restart the server after editing `.env`
 
 ### "Authentication unsuccessful" when sending email
 
-- You're using your regular Gmail password, not an App Password
-- App Password is exactly 16 characters, no spaces
-- Delete old App Password and create a new one
+- Verify the provider's host, port, TLS mode, username, and SMTP password.
+- For Gmail, use an App Password rather than the regular account password.
 
 ### Email lands in Spam folder
 

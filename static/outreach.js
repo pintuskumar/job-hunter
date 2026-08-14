@@ -238,6 +238,16 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+function safeHttpUrl(raw) {
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw, window.location.origin);
+        return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+    } catch {
+        return '';
+    }
+}
+
 function formatDate(d) {
     if (!d) return '';
     try { return new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
@@ -259,8 +269,8 @@ function render() {
 
     list.innerHTML = outreachItems.map(item => {
         const statusClassMap = { pending: 'new', emailed: 'reviewed', messaged: 'reviewed', replied: 'applied', followed_up: 'reviewed' };
-        const statusBadge = `<span class="status-badge status-${statusClassMap[item.status] || 'reviewed'}">${item.status.replace('_', ' ')}</span>`;
-        const jobUrl = item.job_url || '#';
+        const safeStatus = Object.prototype.hasOwnProperty.call(statusClassMap, item.status) ? item.status : 'pending';
+        const statusBadge = `<span class="status-badge status-${statusClassMap[safeStatus]}">${escapeHtml(safeStatus.replace('_', ' '))}</span>`;
         const checked = selectedIds.has(item.id) ? 'checked' : '';
         const selectBox = showSelect
             ? `<input type="checkbox" ${checked} onchange="toggleSelectOne('${item.id}', this.checked)" style="margin-right:10px;transform:scale(1.2);">`
@@ -310,7 +320,7 @@ function render() {
                         <div style="margin-bottom:8px;">
                             <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;">${categoryLabels[cat] || cat}</div>
                             ${group.map(s => `
-                                <a href="${escapeHtml(s.url)}" target="_blank" class="btn btn-sm" style="background:${colors[cat] || '#0a66c2'};color:white;margin:2px 4px 2px 0;">🔍 ${escapeHtml(s.label)}</a>
+                                ${safeHttpUrl(s.url) ? `<a href="${escapeHtml(safeHttpUrl(s.url))}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" style="background:${colors[cat] || '#0a66c2'};color:white;margin:2px 4px 2px 0;">🔍 ${escapeHtml(s.label)}</a>` : ''}
                             `).join('')}
                         </div>
                     `).join('');
@@ -328,7 +338,7 @@ function render() {
             </details>
 
             <div class="outreach-actions">
-                ${item.job_url ? `<a href="${escapeHtml(item.job_url)}" target="_blank" class="btn btn-primary btn-sm">Apply to Job</a>` : ''}
+                ${safeHttpUrl(item.job_url) ? `<a href="${escapeHtml(safeHttpUrl(item.job_url))}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">Apply to Job</a>` : ''}
                 <button class="btn btn-outline btn-sm" onclick="copyDM('${item.id}', 'short')">Copy Short DM</button>
                 <button class="btn btn-outline btn-sm" onclick="copyDM('${item.id}', 'long')">Copy Long DM</button>
                 ${(item.status === 'pending' || item.status === 'emailed') ? `<button class="btn btn-yellow btn-sm" onclick="setStatus('${item.id}', 'messaged')">Mark Messaged</button>` : ''}

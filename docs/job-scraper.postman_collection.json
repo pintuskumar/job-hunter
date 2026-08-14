@@ -509,6 +509,18 @@
               "path": ["api", "export", "sheets", "status"]
             }
           }
+        },
+        {
+          "name": "Verify Sheets access (read-only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/export/sheets/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "export", "sheets", "verify"]
+            }
+          }
         }
       ]
     },

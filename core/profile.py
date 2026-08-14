@@ -80,8 +80,7 @@ def default_config() -> dict:
             "dm_long_template": "",
             "email_digest_subject_role": "software",
             "email_greeting": "Your Daily Job Digest",
-            # Sender address is not a profile setting — it is fixed to
-            # SENDER_EMAIL in .env so it always matches SENDER_APP_PASSWORD.
+            # Sender credentials are deployment settings, not profile data.
             "recipient_email": "",
         },
     }
@@ -325,7 +324,11 @@ def import_preset(slug: str, activate: bool = False,
       - overwrite=False → create a new row with " (imported at ...)" suffix
     """
     import yaml
-    path = PROFILES_DIR / f"{slug}.yaml"
+    if not slug or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in slug.lower()):
+        raise ValueError("Invalid preset slug")
+    path = (PROFILES_DIR / f"{slug}.yaml").resolve()
+    if path.parent != PROFILES_DIR.resolve():
+        raise ValueError("Invalid preset slug")
     if not path.exists():
         raise FileNotFoundError(f"Preset not found: {path}")
     with open(path, encoding="utf-8") as f:
