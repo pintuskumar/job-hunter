@@ -166,5 +166,13 @@ REQUIRE_AUTH = _env_bool("REQUIRE_AUTH", False)
 if REQUIRE_AUTH and not APP_PASSWORD:
     raise RuntimeError("APP_PASSWORD is required when REQUIRE_AUTH is true")
 
+# Extra origins (e.g. the Vercel-hosted frontend) allowed to call the API
+# cross-origin, for both CORS headers and the same-origin mutation guard.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"
