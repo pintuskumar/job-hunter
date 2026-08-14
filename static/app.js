@@ -136,8 +136,9 @@ function indiaBadge(value, note) {
         no: 'Not India',
         unknown: 'Unknown',
     };
-    const label = labels[value] || labels.unknown;
-    const cls = `india-${value || 'unknown'}`;
+    const safeValue = Object.prototype.hasOwnProperty.call(labels, value) ? value : 'unknown';
+    const label = labels[safeValue];
+    const cls = `india-${safeValue}`;
     const tooltip = note ? ` title="${escapeHtml(note)}"` : '';
     return `<span class="${cls}"${tooltip}>${label}</span>`;
 }
@@ -169,7 +170,7 @@ function renderStats() {
         </div>
         ${Object.entries(s.by_source || {}).map(([src, count]) => `
             <div class="stat-card">
-                <div class="label">${src}</div>
+                <div class="label">${escapeHtml(src)}</div>
                 <div class="value">${count}</div>
             </div>
         `).join('')}
@@ -191,7 +192,8 @@ function scoreClass(score) {
 }
 
 function statusClass(status) {
-    return `status-${status || 'new'}`;
+    const allowed = new Set(['new', 'reviewed', 'applied', 'stale']);
+    return `status-${allowed.has(status) ? status : 'new'}`;
 }
 
 function stripHtml(html) {
@@ -244,7 +246,7 @@ function renderJobs() {
                 </div>
             </div>
             <div class="job-actions">
-                <span class="status-badge ${statusClass(job.status)}">${job.status}</span>
+                <span class="status-badge ${statusClass(job.status)}">${escapeHtml(job.status || 'new')}</span>
                 ${job.mark_for_email ? '<span style="color:var(--yellow);font-size:11px;">📧 Marked</span>' : ''}
             </div>
         </div>
@@ -262,7 +264,7 @@ function openModal(jobId) {
             <span class="score-badge ${scoreClass(job.relevance_score)}" style="width:40px;height:40px;font-size:14px;">
                 ${job.relevance_score}
             </span>
-            <span class="status-badge ${statusClass(job.status)}">${job.status}</span>
+            <span class="status-badge ${statusClass(job.status)}">${escapeHtml(job.status || 'new')}</span>
             ${indiaBadge(job.india_friendly, job.location_note)}
             <span class="tag">${escapeHtml(job.source)}</span>
             ${job.salary ? `<span class="tag">${escapeHtml(job.salary)}</span>` : ''}
@@ -274,12 +276,12 @@ function openModal(jobId) {
                 `<span class="tag">${escapeHtml(t.trim())}</span>`
             ).join('')}
         </div>
-        <div class="modal-desc">${job.description || '<em>No description available</em>'}</div>
+        <div class="modal-desc" style="white-space:pre-wrap;">${escapeHtml(job.description || 'No description available')}</div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="updateStatus('${job.id}', 'reviewed')">Mark Reviewed</button>
             <button class="btn btn-green" onclick="updateStatus('${job.id}', 'applied')">Mark Applied</button>
             <button class="btn btn-yellow" onclick="updateStatus('${job.id}', 'stale')">Mark Stale</button>
-            ${job.url ? `<a href="${escapeHtml(job.url)}" target="_blank" class="btn btn-primary">Apply</a>` : ''}
+            ${safeHttpUrl(job.url) ? `<a href="${escapeHtml(safeHttpUrl(job.url))}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Apply</a>` : ''}
             <button class="btn btn-outline" onclick="closeModal()">Close</button>
         </div>
     `;
@@ -295,6 +297,16 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function safeHttpUrl(raw) {
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw, window.location.origin);
+        return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+    } catch {
+        return '';
+    }
 }
 
 function formatDate(dateStr) {

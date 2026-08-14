@@ -7,3 +7,4 @@ venv/
 credentials.json
 dox/*.pdf
 .claude/
+.railway/

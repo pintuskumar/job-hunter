@@ -1,15 +1,21 @@
+import base64
+import binascii
+import secrets
+from urllib.parse import urlsplit
+
 import uvicorn
 from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from core.database import (
-    init_db, get_jobs, get_job_by_id, update_job_status, get_stats, get_sources,
+    init_db, get_connection, get_jobs, get_job_by_id, update_job_status,
+    get_stats, get_sources,
     upsert_company, get_companies, get_company_by_id,
     update_company_crawl_status, get_company_stats,
     insert_outreach, get_outreach, update_outreach_status, update_outreach_notes,
@@ -18,7 +24,10 @@ from core.database import (
 )
 from core.collector import run_collection, run_company_crawl
 from core.sheets import export_to_sheet
-from core.emailer import run_daily_pipeline, send_daily_digest, generate_outreach_for_top_jobs
+from core.emailer import (
+    generate_outreach_for_top_jobs, run_daily_pipeline, send_daily_digest,
+    verify_smtp_connection,
+)
 from core.profile import (
     get_active_profile, list_profiles, get_profile, create_profile,
     update_profile, activate_profile, delete_profile, duplicate_profile,
@@ -27,13 +36,95 @@ from core.profile import (
     update_active_profile_query, delete_active_profile_query,
 )
 from config.settings import (
-    HOST, PORT, GOOGLE_SHEETS_CREDS, GOOGLE_SHEET_ID, HUNTER_API_KEY,
-    DAILY_EMAIL_HOUR, DAILY_EMAIL_TIMEZONE, SENDER_EMAIL,
+    APP_PASSWORD, APP_USERNAME, DAILY_EMAIL_HOUR, DAILY_EMAIL_TIMEZONE,
+    EMAIL_CONFIGURED, ENABLE_SCHEDULER, GOOGLE_SHEETS_CREDS,
+    GOOGLE_SHEET_ID, HOST, HUNTER_API_KEY, JSEARCH_MONTHLY_LIMIT,
+    JSEARCH_MONTHLY_RESERVE, PORT, RELOAD, SENDER_EMAIL, STATIC_DIR,
+    TEMPLATES_DIR,
 )
 
-app = FastAPI(title="Job Scraper", version="2.0.0")
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app = FastAPI(
+    title="Job Scraper",
+    version="2.1.0",
+    docs_url=None if APP_PASSWORD else "/docs",
+    redoc_url=None if APP_PASSWORD else "/redoc",
+    openapi_url=None if APP_PASSWORD else "/openapi.json",
+)
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _valid_basic_auth(header: str) -> bool:
+    if not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        username, password = decoded.split(":", 1)
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return False
+    return (
+        secrets.compare_digest(username, APP_USERNAME)
+        and secrets.compare_digest(password, APP_PASSWORD)
+    )
+
+
+def _same_origin(request: Request) -> bool:
+    """Reject browser cross-origin writes while allowing non-browser CLI clients."""
+    source = request.headers.get("origin") or request.headers.get("referer")
+    if not source:
+        return True
+    parsed = urlsplit(source)
+    return parsed.scheme in {"http", "https"} and parsed.netloc == request.headers.get("host", "")
+
+
+def _security_headers(response):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.middleware("http")
+async def protect_private_app(request: Request, call_next):
+    health_path = request.url.path in {"/health/live", "/health/ready"}
+    if APP_PASSWORD and not health_path:
+        if not _valid_basic_auth(request.headers.get("authorization", "")):
+            return _security_headers(JSONResponse(
+                {"detail": "Authentication required"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Job Hunter", charset="UTF-8"'},
+            ))
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _same_origin(request):
+            return _security_headers(JSONResponse(
+                {"detail": "Cross-origin request rejected"}, status_code=403,
+            ))
+
+    response = await call_next(request)
+    return _security_headers(response)
+
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready():
+    conn = None
+    try:
+        conn = get_connection()
+        table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone()
+        if not table:
+            raise RuntimeError("schema unavailable")
+        return {"status": "ready"}
+    except Exception:
+        return JSONResponse({"status": "not_ready"}, status_code=503)
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 scheduler = AsyncIOScheduler(timezone=DAILY_EMAIL_TIMEZONE)
@@ -43,9 +134,9 @@ scheduler = AsyncIOScheduler(timezone=DAILY_EMAIL_TIMEZONE)
 async def startup():
     init_db()
 
-    # Schedule daily digest at configured hour IST. The sender is fixed to
-    # SENDER_EMAIL in .env — it has to match SENDER_APP_PASSWORD.
-    if SENDER_EMAIL:
+    # The scheduler is opt-in so a deployment or smoke test can never send mail
+    # merely because SMTP credentials exist.
+    if ENABLE_SCHEDULER and EMAIL_CONFIGURED:
         scheduler.add_job(
             run_daily_pipeline,
             CronTrigger(hour=DAILY_EMAIL_HOUR, minute=0),
@@ -56,7 +147,7 @@ async def startup():
         scheduler.start()
         print(f"Scheduled daily digest at {DAILY_EMAIL_HOUR}:00 IST", flush=True)
     else:
-        print("SENDER_EMAIL not set in .env — daily digest disabled", flush=True)
+        print("Daily digest scheduler disabled", flush=True)
 
 
 @app.on_event("shutdown")
@@ -89,6 +180,11 @@ async def api_get_jobs(
     return {"jobs": jobs, "count": len(jobs)}
 
 
+@app.get("/api/jobs/marked")
+async def api_get_marked():
+    return {"jobs": get_marked_jobs()}
+
+
 @app.get("/api/jobs/{job_id}")
 async def api_get_job(job_id: str):
     job = get_job_by_id(job_id)
@@ -98,7 +194,10 @@ async def api_get_job(job_id: str):
 
 
 @app.patch("/api/jobs/{job_id}/status")
-async def api_update_status(job_id: str, status: str = Query(...)):
+async def api_update_status(
+    job_id: str,
+    status: Literal["new", "reviewed", "applied", "stale"] = Query(...),
+):
     update_job_status(job_id, status)
     return {"ok": True}
 
@@ -365,7 +464,10 @@ async def api_generate_outreach(
 
 
 @app.patch("/api/outreach/{outreach_id}/status")
-async def api_update_outreach(outreach_id: str, status: str = Query(...)):
+async def api_update_outreach(
+    outreach_id: str,
+    status: Literal["pending", "emailed", "messaged", "replied", "followed_up"] = Query(...),
+):
     field_map = {"messaged": "messaged", "replied": "replied", "followed_up": "followed_up"}
     update_outreach_status(outreach_id, status, field=field_map.get(status))
     return {"ok": True}
@@ -436,11 +538,6 @@ async def api_mark_for_email(job_id: str):
     return {"mark_for_email": new_state}
 
 
-@app.get("/api/jobs/marked")
-async def api_get_marked():
-    return {"jobs": get_marked_jobs()}
-
-
 # ── Email Digest API ───────────────────────────────────────────
 
 @app.post("/api/email/send-now")
@@ -457,6 +554,12 @@ async def api_run_pipeline(send: bool = Query(True)):
     return result
 
 
+@app.post("/api/email/test-connection")
+async def api_test_email_connection():
+    """Authenticate to SMTP over TLS without sending a message."""
+    return verify_smtp_connection()
+
+
 @app.get("/api/email/status")
 async def api_email_status():
     from core.database import get_email_logs
@@ -466,16 +569,26 @@ async def api_email_status():
     profile_recipient = (out_cfg.get("recipient_email") or "").strip()
     env_recipient = os.getenv("RECIPIENT_EMAIL", "")
     effective_recipient = profile_recipient or env_recipient
+    def mask_email(value: str) -> str:
+        local, separator, domain = value.partition("@")
+        if not separator:
+            return "configured" if value else ""
+        return f"{local[:1]}***@{domain}"
+
+    safe_logs = [
+        {**entry, "recipient": mask_email(entry.get("recipient", "")), "error": ""}
+        for entry in logs
+    ]
     return {
-        "sender_configured": bool(SENDER_EMAIL) and bool(os.getenv("SENDER_APP_PASSWORD")),
-        "sender": SENDER_EMAIL,
+        "sender_configured": EMAIL_CONFIGURED,
+        "sender": mask_email(SENDER_EMAIL),
         "sender_source": "env" if SENDER_EMAIL else "none",
-        "recipient": effective_recipient,
+        "recipient": mask_email(effective_recipient),
         "recipient_source": "profile" if profile_recipient else ("env" if env_recipient else "none"),
         "candidate_name": out_cfg.get("candidate_name") or "",
         "scheduled_hour": DAILY_EMAIL_HOUR,
         "timezone": DAILY_EMAIL_TIMEZONE,
-        "recent_sends": logs,
+        "recent_sends": safe_logs,
     }
 
 
@@ -484,15 +597,15 @@ async def api_jsearch_status():
     from core.database import get_api_usage
     import os
     usage = get_api_usage("jsearch")
-    # Free tier: 200 requests/month
-    monthly_limit = 200
+    usable_limit = JSEARCH_MONTHLY_LIMIT - JSEARCH_MONTHLY_RESERVE
     return {
         "configured": bool(os.getenv("RAPIDAPI_KEY")),
         "month": usage["month"],
         "today": usage["today"],
         "total": usage["total"],
-        "monthly_limit": monthly_limit,
-        "remaining": max(0, monthly_limit - usage["month"]),
+        "monthly_limit": JSEARCH_MONTHLY_LIMIT,
+        "reserve": JSEARCH_MONTHLY_RESERVE,
+        "remaining": max(0, usable_limit - usage["month"]),
     }
 
 
@@ -515,8 +628,8 @@ async def api_hunter_status():
                 "available": data["data"].get("requests", {}).get("available", 0),
             }
         return {"configured": True, "error": "could not fetch stats"}
-    except Exception as e:
-        return {"configured": True, "error": str(e)}
+    except Exception:
+        return {"configured": True, "error": "Hunter status is temporarily unavailable"}
 
 
 # ── Profiles API ───────────────────────────────────────────────
@@ -702,4 +815,4 @@ async def profile_page(request: Request):
 
 if __name__ == "__main__":
     print(f"Starting Job Scraper at http://{HOST}:{PORT}")
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=True)
+    uvicorn.run("main:app", host=HOST, port=PORT, reload=RELOAD, workers=1)

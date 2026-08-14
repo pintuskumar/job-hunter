@@ -54,7 +54,7 @@
 │  • APScheduler triggers pipeline                               │
 │  • 15 job cards in HTML email                                  │
 │  • Each card: job info + 7 search buttons + DM + apply link    │
-│  • Sent via Gmail SMTP (app password)                          │
+│  • Sent via TLS-protected SMTP credentials                     │
 │  • Marked as emailed — won't resend next day                   │
 └────────────────────────────────────────────────────────────────┘
                               │
@@ -170,13 +170,13 @@ User clicks a button → LinkedIn opens with relevant people listed → they pic
 
 ## Email Delivery
 
-- **SMTP:** Gmail (smtp.gmail.com:465, SSL)
-- **Auth:** App Password (not regular Gmail password)
+- **SMTP:** Provider-configured implicit TLS or STARTTLS
+- **Auth:** Dedicated SMTP credentials (Gmail uses an App Password)
 - **Format:** HTML with inline CSS + plain text fallback
 - **Size:** ~80KB per email (well under Gmail's 25MB limit)
 - **Rate:** 1 email/day → no spam concerns
 
-Daily at 9 AM IST, the `run_daily_pipeline` function:
+When `ENABLE_SCHEDULER=true`, daily at 9 AM IST the `run_daily_pipeline` function:
 1. Calls `run_collection()` — fetch new jobs
 2. Auto-generates outreach for top 15 new jobs
 3. Sends email

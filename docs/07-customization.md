@@ -248,7 +248,7 @@ Add `candidate_id` to all tables. Switch context via URL or login. Not currently
 ## Disable Features
 
 ### Disable daily email
-Set `SENDER_EMAIL=` (empty) in `.env`. Scheduler skips.
+Set `ENABLE_SCHEDULER=false` in `.env`. Manual collection and email preview remain available.
 
 ### Disable company crawling
 Comment out in `core/collector.py`:
