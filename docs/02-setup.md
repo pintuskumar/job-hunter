@@ -183,6 +183,11 @@ The included `railway.json` uses Railpack, one Uvicorn worker, and
 `/health/ready`. Attach a persistent volume at `/data`, set the approved
 variables individually, then deploy with `railway up`. Do not upload `.env`.
 
+Railway blocks outbound SMTP on Free, Trial, and Hobby plans. SMTP requires
+Pro or above followed by a redeploy; lower tiers need a transactional email
+provider's HTTPS API. Leave `ENABLE_SCHEDULER=false` until a no-send connection
+test succeeds and a recipient is explicitly configured.
+
 ### Option B: Keep your laptop on
 
 If laptop is always on, leave the server running. Add to startup if needed.

@@ -189,6 +189,9 @@ GOOGLE_SHEET_ID=
 2. **SMTP credentials**
    - Use any provider that supports implicit TLS or STARTTLS.
    - For Gmail, use an App Password instead of the account password.
+   - Railway allows outbound SMTP only on Pro and above. On Free, Trial, or
+     Hobby, keep `ENABLE_SCHEDULER=false` and use an HTTPS email provider once
+     that integration is added.
 
 3. **Google Sheets** (optional, 10 min)
    - See [docs/02-setup.md](docs/02-setup.md) for full walkthrough
