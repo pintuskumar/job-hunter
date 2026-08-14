@@ -156,8 +156,10 @@ HUNTER_API_KEY=
 
 # ─── Optional: Google Sheets Export ───
 # For n8n / external automation pipelines
-# Setup: Create Google Cloud service account → download credentials.json
-GOOGLE_SHEETS_CREDS=credentials.json
+# Railway: sealed JSON for a dedicated service account
+GOOGLE_SHEETS_CREDENTIALS_JSON=
+# Local alternative: an ignored .secrets/ file, or leave blank for gcloud ADC
+GOOGLE_SHEETS_CREDS=
 GOOGLE_SHEET_ID=
 ```
 
@@ -176,7 +178,8 @@ GOOGLE_SHEET_ID=
 | `DAILY_JOBS_COUNT` | Optional (defaults to 15) | 15 jobs per email |
 | `APP_USERNAME`, `APP_PASSWORD`, `REQUIRE_AUTH=true` | Required for a public deployment | App is not protected; `REQUIRE_AUTH=true` makes a missing password fail closed |
 | `HUNTER_API_KEY` | Optional | Currently unused — LinkedIn search URLs replaced Hunter |
-| `GOOGLE_SHEETS_CREDS` | Optional | Sheets export disabled |
+| `GOOGLE_SHEETS_CREDENTIALS_JSON` | Optional | Railway Sheets export disabled |
+| `GOOGLE_SHEETS_CREDS` | Optional | Local `.secrets/` file fallback; gcloud ADC is tried when blank |
 | `GOOGLE_SHEET_ID` | Optional | Sheets export disabled |
 
 ### How to get each key
@@ -194,7 +197,12 @@ GOOGLE_SHEET_ID=
      that integration is added.
 
 3. **Google Sheets** (optional, 10 min)
-   - See [docs/02-setup.md](docs/02-setup.md) for full walkthrough
+   - Enable the Google Sheets API in a GCP project.
+   - Create a dedicated service account with no project roles and share only the
+     target spreadsheet with its email as Editor.
+   - Store its JSON as a sealed `GOOGLE_SHEETS_CREDENTIALS_JSON` variable on
+     Railway. Never commit the key or a human OAuth refresh token.
+   - See [docs/02-setup.md](docs/02-setup.md) for the local file/ADC alternatives.
 
 See [docs/02-setup.md](docs/02-setup.md) for complete setup instructions.
 

@@ -75,8 +75,9 @@ DAILY_EMAIL_TIMEZONE = os.getenv("DAILY_EMAIL_TIMEZONE", "Asia/Kolkata").strip()
 DAILY_JOBS_COUNT = _env_int("DAILY_JOBS_COUNT", 15, 1, 100)
 
 # Google Sheets
-GOOGLE_SHEETS_CREDS = os.getenv("GOOGLE_SHEETS_CREDS", "credentials.json")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
+GOOGLE_SHEETS_CREDENTIALS_JSON = os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON", "").strip()
+GOOGLE_SHEETS_CREDS = os.getenv("GOOGLE_SHEETS_CREDS", "").strip()
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "").strip()
 
 # Search criteria defaults
 DEFAULT_SEARCH_TERMS = [

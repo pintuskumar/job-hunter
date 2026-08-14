@@ -189,7 +189,8 @@ Sent automatically at **9:00 AM IST** every day.
 
 ## Google Sheets Export (Optional)
 
-If configured (requires `GOOGLE_SHEETS_CREDS` + `GOOGLE_SHEET_ID` in `.env`):
+If configured (requires `GOOGLE_SHEET_ID` plus Railway service-account JSON,
+a local service-account file, or local Application Default Credentials):
 
 Click **Export to Sheets** on Jobs page. Modal lets you:
 - Set sheet tab name

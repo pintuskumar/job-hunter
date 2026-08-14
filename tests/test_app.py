@@ -72,6 +72,42 @@ class ApplicationSmokeTests(unittest.TestCase):
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers.get("content-type", ""))
 
+    @patch("main.sheets_credentials_available", return_value=True)
+    def test_sheets_status_is_redacted(self, _available):
+        with patch.object(main, "GOOGLE_SHEET_ID", "private-sheet-id"):
+            response = self.client.get("/api/export/sheets/status", headers=self.auth)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "configured": True,
+                "sheet_id_configured": True,
+                "credentials_available": True,
+            },
+        )
+        self.assertNotIn("private-sheet-id", response.text)
+
+    @patch("main.verify_sheet_access")
+    @patch("main.sheets_credentials_available", return_value=True)
+    def test_sheets_verify_is_read_only_and_redacted(self, _available, verify):
+        with patch.object(main, "GOOGLE_SHEET_ID", "private-sheet-id"):
+            response = self.client.get("/api/export/sheets/verify", headers=self.auth)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"configured": True, "reachable": True})
+        verify.assert_called_once_with(
+            spreadsheet_id="private-sheet-id", creds_file=main.GOOGLE_SHEETS_CREDS
+        )
+        self.assertNotIn("private-sheet-id", response.text)
+
+    def test_invalid_sheets_export_mode_is_rejected(self):
+        response = self.client.post(
+            "/api/export/sheets?mode=unexpected",
+            headers=self.auth,
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_production_docs_are_disabled(self):
         self.assertEqual(self.client.get("/docs", headers=self.auth).status_code, 404)
         self.assertEqual(self.client.get("/openapi.json", headers=self.auth).status_code, 404)

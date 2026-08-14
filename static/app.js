@@ -10,8 +10,22 @@ const state = {
 
 // ── API ──
 async function api(path, opts = {}) {
-    const resp = await fetch(`/api${path}`, opts);
-    return resp.json();
+    const init = { headers: {}, ...opts };
+    if (init.body && typeof init.body !== 'string') {
+        init.body = JSON.stringify(init.body);
+        init.headers['Content-Type'] = 'application/json';
+    }
+    const resp = await fetch(`/api${path}`, init);
+    if (!resp.ok) {
+        let detail = resp.statusText;
+        try {
+            const body = await resp.json();
+            detail = body.detail || body.error || JSON.stringify(body);
+        } catch {}
+        throw new Error(`${resp.status}: ${detail}`);
+    }
+    const contentType = resp.headers.get('content-type') || '';
+    return contentType.includes('application/json') ? resp.json() : resp.text();
 }
 
 async function loadJobs() {
@@ -390,7 +404,7 @@ async function checkSheetsStatus() {
         const data = await api('/export/sheets/status');
         const btn = document.getElementById('btn-export');
         if (!data.configured) {
-            btn.title = 'Google Sheets not configured — add GOOGLE_SHEET_ID + credentials.json';
+            btn.title = 'Google Sheets not configured — add a Sheet ID and credentials';
             btn.style.opacity = '0.6';
         }
     } catch (e) {}
@@ -418,12 +432,8 @@ async function doExport() {
 
     try {
         const data = await api(`/export/sheets?${params}`, { method: 'POST' });
-        if (data.error) {
-            showToast('Export failed: ' + data.error);
-        } else {
-            showToast(`Exported ${data.exported} jobs to Google Sheets!`);
-            closeExportModal();
-        }
+        showToast(`Exported ${data.exported} jobs to Google Sheets!`);
+        closeExportModal();
     } catch (e) {
         showToast('Export failed: ' + e.message);
     } finally {
@@ -583,3 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
         searchTimeout = setTimeout(applyFilters, 400);
     });
 });
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { api };
+}

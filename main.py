@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from typing import Literal, Optional
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -23,7 +24,12 @@ from core.database import (
     toggle_mark_for_email, get_marked_jobs,
 )
 from core.collector import run_collection, run_company_crawl
-from core.sheets import export_to_sheet
+from core.sheets import (
+    SheetsConfigurationError,
+    export_to_sheet,
+    sheets_credentials_available,
+    verify_sheet_access,
+)
 from core.emailer import (
     generate_outreach_for_top_jobs, run_daily_pipeline, send_daily_digest,
     verify_smtp_connection,
@@ -364,35 +370,63 @@ async def api_export_sheets(
     source: Optional[str] = None,
     search: Optional[str] = None,
     tech: Optional[str] = None,
-    mode: str = Query("replace"),
+    mode: Literal["replace", "append"] = Query("replace"),
     sheet_name: str = Query("Jobs"),
 ):
-    import os
     creds = GOOGLE_SHEETS_CREDS
     sheet_id = GOOGLE_SHEET_ID
     if not sheet_id:
-        return {"error": "GOOGLE_SHEET_ID not set in .env"}
-    if not os.path.exists(creds):
-        return {"error": f"Credentials file not found: {creds}"}
+        raise HTTPException(status_code=503, detail="Google Sheets is not configured")
+    if not await run_in_threadpool(sheets_credentials_available, creds):
+        raise HTTPException(status_code=503, detail="Google Sheets is not configured")
     try:
-        result = export_to_sheet(
+        result = await run_in_threadpool(
+            export_to_sheet,
             creds_file=creds, spreadsheet_id=sheet_id, sheet_name=sheet_name,
             min_score=min_score, india_friendly=india_friendly,
             source=source, search=search, tech=tech, mode=mode,
         )
         return result
-    except Exception as e:
-        return {"error": str(e)}
+    except SheetsConfigurationError:
+        raise HTTPException(status_code=503, detail="Google Sheets is not configured") from None
+    except Exception:
+        raise HTTPException(status_code=502, detail="Google Sheets export failed") from None
 
 
 @app.get("/api/export/sheets/status")
 async def api_sheets_status():
-    import os
+    credentials_available = False
+    if GOOGLE_SHEET_ID:
+        credentials_available = await run_in_threadpool(
+            sheets_credentials_available, GOOGLE_SHEETS_CREDS
+        )
     return {
-        "configured": bool(GOOGLE_SHEET_ID) and os.path.exists(GOOGLE_SHEETS_CREDS),
-        "sheet_id": GOOGLE_SHEET_ID[:10] + "..." if GOOGLE_SHEET_ID else "",
-        "creds_exists": os.path.exists(GOOGLE_SHEETS_CREDS),
+        "configured": bool(GOOGLE_SHEET_ID) and credentials_available,
+        "sheet_id_configured": bool(GOOGLE_SHEET_ID),
+        "credentials_available": credentials_available,
     }
+
+
+@app.get("/api/export/sheets/verify")
+async def api_verify_sheets():
+    if not GOOGLE_SHEET_ID:
+        raise HTTPException(status_code=503, detail="Google Sheets is not configured")
+    credentials_available = await run_in_threadpool(
+        sheets_credentials_available, GOOGLE_SHEETS_CREDS
+    )
+    if not credentials_available:
+        raise HTTPException(status_code=503, detail="Google Sheets is not configured")
+    try:
+        await run_in_threadpool(
+            verify_sheet_access,
+            spreadsheet_id=GOOGLE_SHEET_ID,
+            creds_file=GOOGLE_SHEETS_CREDS,
+        )
+        return {"configured": True, "reachable": True}
+    except SheetsConfigurationError:
+        raise HTTPException(status_code=503, detail="Google Sheets is not configured") from None
+    except Exception:
+        raise HTTPException(status_code=502, detail="Google Sheets verification failed") from None
 
 
 # ── Outreach API ───────────────────────────────────────────────

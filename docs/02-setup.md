@@ -90,7 +90,8 @@ APP_PASSWORD=replace_with_a_long_random_password
 REQUIRE_AUTH=true
 
 # Google Sheets export — optional
-GOOGLE_SHEETS_CREDS=credentials.json
+GOOGLE_SHEETS_CREDENTIALS_JSON=
+GOOGLE_SHEETS_CREDS=
 GOOGLE_SHEET_ID=
 ```
 
@@ -100,6 +101,17 @@ GOOGLE_SHEET_ID=
 - Set `SMTP_SECURE=false` and `SMTP_STARTTLS=true` for STARTTLS (commonly port 587).
 - `SMTP_FROM_EMAIL` is the message sender.
 - `RECIPIENT_EMAIL` is where the daily digest gets delivered (the job seeker)
+
+For Railway, create a dedicated Google service account, enable the Google
+Sheets API, share only the target spreadsheet with the service-account email as
+Editor, and set the complete JSON key as the sealed
+`GOOGLE_SHEETS_CREDENTIALS_JSON` variable. Do not commit it or copy a human
+OAuth refresh token to Railway.
+
+For local development, either put a service-account JSON file under the ignored
+`.secrets/` directory and point `GOOGLE_SHEETS_CREDS` to it, or leave the path
+blank and use Application Default Credentials. Only the Google Sheets scope is
+required; Drive access is not used by the app.
 
 ---
 
