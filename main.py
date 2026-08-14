@@ -6,9 +6,7 @@ from urllib.parse import urlsplit
 import uvicorn
 from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, PlainTextResponse
 from typing import Literal, Optional
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -47,7 +45,7 @@ from config.settings import (
     DAILY_EMAIL_TIMEZONE, EMAIL_CONFIGURED, ENABLE_SCHEDULER,
     GOOGLE_SHEETS_CREDS, GOOGLE_SHEET_ID, HOST, HUNTER_API_KEY,
     JSEARCH_MONTHLY_LIMIT, JSEARCH_MONTHLY_RESERVE, PORT, RELOAD,
-    SENDER_EMAIL, STATIC_DIR, TEMPLATES_DIR,
+    SENDER_EMAIL,
 )
 
 app = FastAPI(
@@ -57,8 +55,6 @@ app = FastAPI(
     redoc_url=None if APP_PASSWORD else "/redoc",
     openapi_url=None if APP_PASSWORD else "/openapi.json",
 )
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 if ALLOWED_ORIGINS:
     app.add_middleware(
@@ -844,23 +840,6 @@ async def api_rescore_all(
         conn.close()
 
     return {"ok": True, "scanned": len(rows), "updated": updated, "deleted": deleted}
-
-
-# ── UI Routes ──────────────────────────────────────────────────
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    return templates.TemplateResponse(request, "dashboard.html")
-
-
-@app.get("/outreach", response_class=HTMLResponse)
-async def outreach_page(request: Request):
-    return templates.TemplateResponse(request, "outreach.html")
-
-
-@app.get("/profile", response_class=HTMLResponse)
-async def profile_page(request: Request):
-    return templates.TemplateResponse(request, "profile.html")
 
 
 if __name__ == "__main__":
