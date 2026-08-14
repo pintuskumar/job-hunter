@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import uvicorn
 from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
@@ -42,11 +43,11 @@ from core.profile import (
     update_active_profile_query, delete_active_profile_query,
 )
 from config.settings import (
-    APP_PASSWORD, APP_USERNAME, DAILY_EMAIL_HOUR, DAILY_EMAIL_TIMEZONE,
-    EMAIL_CONFIGURED, ENABLE_SCHEDULER, GOOGLE_SHEETS_CREDS,
-    GOOGLE_SHEET_ID, HOST, HUNTER_API_KEY, JSEARCH_MONTHLY_LIMIT,
-    JSEARCH_MONTHLY_RESERVE, PORT, RELOAD, SENDER_EMAIL, STATIC_DIR,
-    TEMPLATES_DIR,
+    ALLOWED_ORIGINS, APP_PASSWORD, APP_USERNAME, DAILY_EMAIL_HOUR,
+    DAILY_EMAIL_TIMEZONE, EMAIL_CONFIGURED, ENABLE_SCHEDULER,
+    GOOGLE_SHEETS_CREDS, GOOGLE_SHEET_ID, HOST, HUNTER_API_KEY,
+    JSEARCH_MONTHLY_LIMIT, JSEARCH_MONTHLY_RESERVE, PORT, RELOAD,
+    SENDER_EMAIL, STATIC_DIR, TEMPLATES_DIR,
 )
 
 app = FastAPI(
@@ -58,6 +59,14 @@ app = FastAPI(
 )
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+if ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 def _valid_basic_auth(header: str) -> bool:
@@ -75,12 +84,17 @@ def _valid_basic_auth(header: str) -> bool:
 
 
 def _same_origin(request: Request) -> bool:
-    """Reject browser cross-origin writes while allowing non-browser CLI clients."""
+    """Reject browser cross-origin writes, except from an explicitly allowlisted frontend."""
     source = request.headers.get("origin") or request.headers.get("referer")
     if not source:
         return True
     parsed = urlsplit(source)
-    return parsed.scheme in {"http", "https"} and parsed.netloc == request.headers.get("host", "")
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.netloc == request.headers.get("host", ""):
+        return True
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return origin in ALLOWED_ORIGINS
 
 
 def _security_headers(response):
@@ -93,6 +107,8 @@ def _security_headers(response):
 
 @app.middleware("http")
 async def protect_private_app(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
     health_path = request.url.path in {"/health/live", "/health/ready"}
     if APP_PASSWORD and not health_path:
         if not _valid_basic_auth(request.headers.get("authorization", "")):
